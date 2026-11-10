@@ -40,6 +40,7 @@ namespace MeetCam.Source
             private readonly FileStream _stream;
             private readonly MemoryMappedFile _mmf;
             private readonly MemoryMappedViewAccessor _view;
+            private readonly object _gate = new();
             private int _slot;
             private bool _disposed;
 
@@ -52,7 +53,8 @@ namespace MeetCam.Source
                 _stream.SetLength(TotalBytes);
                 _mmf = MemoryMappedFile.CreateFromFile(_stream, null, TotalBytes, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: true);
                 _view = _mmf.CreateViewAccessor(0, TotalBytes, MemoryMappedFileAccess.ReadWrite);
-                WriteHeader();
+                if (!TryKeepPublishedSlot())
+                    WriteHeader();
             }
 
             public unsafe void Publish(ReadOnlySpan<byte> bgra)
@@ -63,26 +65,51 @@ namespace MeetCam.Source
                 // Write a slot the camera is not currently reading, then publish
                 // its index. A single shared buffer made the camera give up and
                 // show black whenever it sampled during the copy.
-                int slot = _slot;
+                lock (_gate)
+                {
+                    if (_disposed)
+                        return;
+
+                    int slot = _slot;
+                    byte* pointer = null;
+                    _view.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
+                    try
+                    {
+                        fixed (byte* src = bgra)
+                        {
+                            Buffer.MemoryCopy(src, pointer + HeaderSize + (slot * PixelBytes), PixelBytes, PixelBytes);
+                        }
+                        Volatile.Write(ref *(int*)(pointer + 4), Shared.FrameWidth);
+                        Volatile.Write(ref *(int*)(pointer + 8), Shared.FrameHeight);
+                        Volatile.Write(ref *(int*)pointer, unchecked((int)Magic));
+                        Volatile.Write(ref *(int*)(pointer + 16), slot);
+                    }
+                    finally
+                    {
+                        _view.SafeMemoryMappedViewHandle.ReleasePointer();
+                    }
+
+                    _slot = (slot + 1) % SlotCount;
+                }
+            }
+
+            private unsafe bool TryKeepPublishedSlot()
+            {
                 byte* pointer = null;
                 _view.SafeMemoryMappedViewHandle.AcquirePointer(ref pointer);
                 try
                 {
-                    fixed (byte* src = bgra)
-                    {
-                        Buffer.MemoryCopy(src, pointer + HeaderSize + (slot * PixelBytes), PixelBytes, PixelBytes);
-                    }
-                    Volatile.Write(ref *(int*)(pointer + 4), Shared.FrameWidth);
-                    Volatile.Write(ref *(int*)(pointer + 8), Shared.FrameHeight);
-                    Volatile.Write(ref *(int*)pointer, unchecked((int)Magic));
-                    Volatile.Write(ref *(int*)(pointer + 16), slot);
+                    var magic = *(uint*)pointer;
+                    var slot = *(int*)(pointer + 16);
+                    if (magic != Magic || (uint)slot >= SlotCount)
+                        return false;
+                    _slot = (slot + 1) % SlotCount;
+                    return true;
                 }
                 finally
                 {
                     _view.SafeMemoryMappedViewHandle.ReleasePointer();
                 }
-
-                _slot = (slot + 1) % SlotCount;
             }
 
             private unsafe void WriteHeader()
@@ -105,12 +132,15 @@ namespace MeetCam.Source
 
             public void Dispose()
             {
-                if (_disposed)
-                    return;
-                _disposed = true;
-                _view.Dispose();
-                _mmf.Dispose();
-                _stream.Dispose();
+                lock (_gate)
+                {
+                    if (_disposed)
+                        return;
+                    _disposed = true;
+                    _view.Dispose();
+                    _mmf.Dispose();
+                    _stream.Dispose();
+                }
             }
         }
 

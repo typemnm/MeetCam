@@ -36,10 +36,10 @@ internal static class SelfTest
         buffer[2] = 30;
         buffer[3] = 255;
         buffer[^4] = 7;
-        using (var writer = new FramePipe.Writer())
-        {
-            writer.Publish(buffer);
-        }
+        var writer = new FramePipe.Writer();
+        writer.Publish(buffer);
+        writer.Dispose();
+        writer.Publish(buffer);
 
         var read = new byte[FramePipe.PixelBytes];
         using var reader = new FramePipe.Reader();

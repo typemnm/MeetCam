@@ -6,124 +6,236 @@ namespace MeetCam;
 
 internal sealed class MainForm : Form
 {
-    private readonly TextBox _path = new() { Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
-    private readonly Button _browse = new() { Text = "찾기", AutoSize = true };
-    private readonly Button _start = new() { Text = "송출 시작", AutoSize = true };
-    private readonly Button _stop = new() { Text = "중지", AutoSize = true, Enabled = false };
-    private readonly PictureBox _preview = new()
+    private static readonly Color Paper = Color.FromArgb(255, 246, 241);
+
+    private readonly MarkBadge _mark = new();
+    private readonly Label _title = new() { AutoSize = true, Text = "MeetCam", ForeColor = Color.FromArgb(42, 33, 28) };
+    private readonly Label _subtitle = new()
     {
-        BackColor = Color.Black,
-        SizeMode = PictureBoxSizeMode.Zoom,
-        Dock = DockStyle.Fill,
+        AutoSize = false,
+        ForeColor = Color.FromArgb(122, 96, 86),
+        Text = "녹화해 둔 영상을 카메라로 보냅니다. 끝나면 처음부터 다시 재생됩니다.",
     };
-    private readonly Label _status = new() { AutoSize = true, Text = "대기 중" };
-    private readonly Label _detail = new() { AutoSize = true, ForeColor = Color.FromArgb(70, 78, 86) };
+    private readonly FieldShell _field = new();
+    private readonly TextBox _path = new() { BorderStyle = BorderStyle.None, BackColor = Color.White };
+    private readonly BounceButton _browse = new() { Text = "찾기", Fill = Color.FromArgb(255, 214, 196), Fore = Color.FromArgb(92, 42, 28) };
+    private readonly PreviewCard _preview = new();
+    private readonly BounceButton _start = new() { Text = "송출 시작" };
+    private readonly BounceButton _stop = new() { Text = "중지", Fill = Color.FromArgb(255, 244, 238), Fore = Color.FromArgb(92, 42, 28), Enabled = false };
+    private readonly Label _status = new() { AutoSize = true, ForeColor = Color.FromArgb(92, 64, 56), Text = "대기 중" };
     private readonly VideoPump _pump = new();
     private readonly CameraHost _camera = new();
-    private readonly System.Windows.Forms.Timer _timer = new() { Interval = 150 };
+    private readonly System.Windows.Forms.Timer _motion = new() { Interval = 16 };
+    private readonly System.Windows.Forms.Timer _frames = new() { Interval = 80 };
     private readonly byte[] _previewBuffer = new byte[FramePipe.PixelBytes];
     private bool _running;
+    private bool _busy;
     private bool _reportedError;
+    private bool _closeAfterStop;
+    private bool _layingOut;
+    private int _motionClock;
 
     public MainForm(string? initialVideo)
     {
         Text = "MeetCam";
         Font = new Font("Segoe UI", 10f);
-        BackColor = Color.FromArgb(246, 247, 249);
-        MinimumSize = new Size(680, 620);
-        ClientSize = new Size(760, 680);
-        StartPosition = FormStartPosition.CenterScreen;
+        BackColor = Paper;
+        ForeColor = Color.FromArgb(42, 33, 28);
+        MinimumSize = new Size(680, 460);
+        ClientSize = new Size(760, 520);
+        StartPosition = FormStartPosition.Manual;
+
         AllowDrop = true;
+        KeyPreview = true;
+        DoubleBuffered = true;
 
-        var title = new Label
-        {
-            Text = "MeetCam",
-            Font = new Font("Segoe UI", 18f, FontStyle.Bold),
-            AutoSize = true,
-            Location = new Point(24, 18),
-        };
-        var hint = new Label
-        {
-            Text = "녹화해 둔 영상을 Google Meet 카메라로 보냅니다. 영상이 끝나면 처음부터 다시 재생합니다.",
-            AutoSize = false,
-            Size = new Size(700, 24),
-            Location = new Point(26, 56),
-            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top,
-        };
-        var fileLabel = new Label { Text = "영상 파일", AutoSize = true, Location = new Point(26, 96) };
-        _path.Location = new Point(26, 120);
-        _path.Width = 600;
+        _title.Font = new Font("Segoe UI", 22f, FontStyle.Bold);
+        _subtitle.Font = new Font("Segoe UI", 10f);
+        _path.Font = new Font("Segoe UI", 11f);
         _path.PlaceholderText = "mp4, mkv, avi, mov, webm";
-        _browse.Location = new Point(636, 118);
-        _browse.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _status.Font = new Font("Segoe UI", 10f);
+        _status.AutoSize = false;
+
+        _field.Controls.Add(_path);
+        Controls.AddRange([_preview, _mark, _title, _subtitle, _field, _browse, _start, _stop, _status]);
+
         _browse.Click += (_, _) => Browse();
-
-        var previewHost = new Panel
-        {
-            Location = new Point(26, 164),
-            Size = new Size(708, 360),
-            BackColor = Color.Black,
-            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top | AnchorStyles.Bottom,
-        };
-        previewHost.Controls.Add(_preview);
-
-        _start.Location = new Point(26, 540);
-        _start.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
-        _start.FlatStyle = FlatStyle.Flat;
-        _start.FlatAppearance.BorderSize = 0;
-        _start.BackColor = Color.FromArgb(24, 110, 78);
-        _start.ForeColor = Color.White;
-        _start.Padding = new Padding(12, 6, 12, 6);
         _start.Click += (_, _) => StartPlayback();
-
-        _stop.Location = new Point(150, 540);
-        _stop.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
-        _stop.FlatStyle = FlatStyle.Flat;
-        _stop.Padding = new Padding(12, 6, 12, 6);
-        _stop.Click += (_, _) => StopPlayback();
-
-        _status.Location = new Point(26, 592);
-        _status.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
-        _detail.Location = new Point(26, 616);
-        _detail.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
-        _detail.Text = "Meet 카메라 목록에서 MeetCam을 고르세요. Firefox도 같은 이름입니다. 앱을 켜 둔 동안 영상이 반복됩니다.";
-
-        Controls.AddRange([title, hint, fileLabel, _path, _browse, previewHost, _start, _stop, _status, _detail]);
-
+        _stop.Click += (_, _) => _ = StopPlaybackAsync();
         _path.Text = initialVideo ?? LoadLastVideo();
-        DragEnter += (_, e) =>
+        if (_path.Text.Length > 0 && !File.Exists(_path.Text))
+            _status.Text = "이전에 골랐던 영상을 찾지 못했습니다.";
+
+        DragEnter += (_, e) => OnDragEntered(e);
+        DragDrop += (_, e) => AcceptDrop(e);
+        DragLeave += (_, _) => ClearDrag();
+        _preview.DragEnter += (_, e) => OnDragEntered(e);
+        _preview.DragDrop += (_, e) => AcceptDrop(e);
+        _preview.DragLeave += (_, _) => ClearDrag();
+        _field.DragEnter += (_, e) => OnDragEntered(e);
+        _field.DragDrop += (_, e) => AcceptDrop(e);
+        KeyDown += OnFormKeyDown;
+        _motion.Tick += (_, _) => StepMotion();
+        _frames.Tick += (_, _) => RefreshPreview();
+        _motion.Start();
+        _frames.Start();
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        var area = Screen.FromControl(this).WorkingArea;
+        var width = Math.Min(Width, Math.Max(MinimumSize.Width, area.Width - 32));
+        var height = Math.Min(Height, Math.Max(MinimumSize.Height, area.Height - 32));
+        Bounds = new Rectangle(
+            area.Left + Math.Max(0, (area.Width - width) / 2),
+            area.Top + Math.Max(0, (area.Height - height) / 2),
+            width,
+            height);
+        LayoutContent();
+        _motionClock = 0;
+        _browse.PopIn();
+        _start.PopIn();
+        _preview.Pop();
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        LayoutContent();
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        e.Graphics.Clear(Paper);
+    }
+
+    private void LayoutContent()
+    {
+        if (_layingOut || ClientSize.Width < 100 || ClientSize.Height < 100)
+            return;
+        _layingOut = true;
+        try
         {
-            if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
-                e.Effect = DragDropEffects.Copy;
-        };
-        DragDrop += (_, e) =>
+            var width = ClientSize.Width;
+            var height = ClientSize.Height;
+            _mark.SetBounds(20, 8, 76, 84);
+            _title.Location = new Point(104, 16);
+            _subtitle.SetBounds(106, 56, Math.Max(80, width - 130), 36);
+            var fieldWidth = Math.Max(120, width - 156);
+            _field.SetBounds(20, 100, fieldWidth, 52);
+            _browse.SetBounds(_field.Right + 12, 98, 104, 56);
+            _path.SetBounds(16, 14, Math.Max(40, _field.Width - 32), 24);
+
+            var buttonsTop = height - 72;
+            var previewTop = 164;
+            var previewHeight = Math.Max(80, buttonsTop - previewTop - 8);
+            _preview.SetBounds(12, previewTop, Math.Max(80, width - 24), previewHeight);
+            _start.SetBounds(20, buttonsTop, 168, 58);
+            _stop.SetBounds(200, buttonsTop, 116, 58);
+            _status.SetBounds(332, buttonsTop + 16, Math.Max(40, width - 352), 28);
+            _start.BringToFront();
+            _stop.BringToFront();
+            _browse.BringToFront();
+        }
+        finally
         {
-            if (e.Data?.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0)
-                _path.Text = files[0];
-        };
-        _timer.Tick += (_, _) => RefreshStatus();
-        _timer.Start();
-        FormClosing += (_, _) => StopPlayback();
+            _layingOut = false;
+        }
+    }
+
+    private void StepMotion()
+    {
+        const float dt = 0.016f;
+        _motionClock++;
+        _mark.Tick(dt);
+        _field.Tick(dt);
+        _browse.Tick(dt);
+        _preview.Tick(dt);
+        _start.Tick(dt);
+        _stop.Tick(dt);
+        if (_motionClock == 8)
+            _stop.PopIn();
+    }
+
+    private void OnFormKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode == Keys.Enter && !_path.Focused)
+        {
+            StartPlayback();
+            e.Handled = true;
+        }
+        else if (e.KeyCode == Keys.Enter && _path.Focused)
+        {
+            StartPlayback();
+            e.SuppressKeyPress = true;
+            e.Handled = true;
+        }
+        else if (e.KeyCode == Keys.Escape && (_running || _busy))
+        {
+            _ = StopPlaybackAsync();
+            e.Handled = true;
+        }
     }
 
     private void Browse()
     {
+        if (_running || _busy)
+            return;
         using var dialog = new OpenFileDialog
         {
             Filter = "영상 파일|*.mp4;*.mkv;*.avi;*.mov;*.webm;*.wmv;*.m4v|모든 파일|*.*",
             Title = "송출할 영상 선택",
         };
         if (dialog.ShowDialog(this) == DialogResult.OK)
-            _path.Text = dialog.FileName;
+            UseVideo(dialog.FileName);
+    }
+
+    private void OnDragEntered(DragEventArgs e)
+    {
+        var ok = e.Data?.GetDataPresent(DataFormats.FileDrop) == true && !_running && !_busy;
+        e.Effect = ok ? DragDropEffects.Copy : DragDropEffects.None;
+        if (ok)
+        {
+            _field.SetHot(true);
+            _preview.SetDrag(true);
+        }
+    }
+
+    private void AcceptDrop(DragEventArgs e)
+    {
+        ClearDrag();
+        if (_running || _busy)
+            return;
+        if (e.Data?.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0)
+            UseVideo(files[0]);
+    }
+
+    private void ClearDrag()
+    {
+        _field.SetHot(false);
+        _preview.SetDrag(false);
+    }
+
+    private void UseVideo(string path)
+    {
+        if (Directory.Exists(path) || !File.Exists(path))
+        {
+            _status.Text = "영상 파일이 아닙니다.";
+            return;
+        }
+        _path.Text = path;
+        _preview.Pop();
+        _status.Text = "준비됨  ·  Enter 또는 송출 시작";
     }
 
     private void StartPlayback()
     {
-        if (_running)
+        if (_running || _busy)
             return;
 
         var path = _path.Text.Trim().Trim('"');
-        if (!File.Exists(path))
+        if (!File.Exists(path) || Directory.Exists(path))
         {
             MessageBox.Show(this, "영상 파일을 찾을 수 없습니다.", "MeetCam", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
@@ -138,20 +250,28 @@ internal sealed class MainForm : Form
 
         try
         {
+            _busy = true;
+            UpdateButtons();
+            _status.Text = "카메라를 준비하는 중";
             _camera.Start();
             _pump.Start(path);
             _running = true;
+            _busy = false;
             _reportedError = false;
             SaveLastVideo(path);
-            _start.Enabled = false;
-            _stop.Enabled = true;
-            _status.Text = "송출 중";
+            _preview.Pop();
+            _preview.SetLive(true);
+            _status.Text = "영상을 여는 중";
+            UpdateButtons();
         }
         catch (Exception ex)
         {
             _pump.Stop();
             _camera.Stop();
             _running = false;
+            _busy = false;
+            _preview.SetLive(false);
+            UpdateButtons();
             MessageBox.Show(this, "송출을 시작하지 못했습니다.\n\n" + ex.Message, "MeetCam", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
@@ -173,28 +293,55 @@ internal sealed class MainForm : Form
         return false;
     }
 
-    private void StopPlayback()
+    private async Task StopPlaybackAsync()
     {
-        if (!_running && _pump.FramesPublished == 0)
+        if (_busy || (!_running && _pump.FramesPublished == 0))
         {
-            _camera.Stop();
+            if (!_running)
+                _camera.Stop();
             return;
         }
 
+        _busy = true;
         _running = false;
-        _pump.Stop();
-        _camera.Stop();
-        _start.Enabled = true;
-        _stop.Enabled = false;
-        _status.Text = "중지됨";
+        UpdateButtons();
+        _status.Text = "멈추는 중";
+        _preview.SetLive(false);
+        try
+        {
+            await Task.Run(_pump.Stop);
+            _camera.Stop();
+            _preview.ClearFrame();
+            _status.Text = "중지됨";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "중지에 실패했습니다.";
+            MessageBox.Show(this, ex.Message, "MeetCam", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            _busy = false;
+            UpdateButtons();
+            if (_closeAfterStop && !IsDisposed)
+                Close();
+        }
     }
 
-    private void RefreshStatus()
+    private void UpdateButtons()
+    {
+        _start.Enabled = !_running && !_busy;
+        _stop.Enabled = _running && !_busy;
+        _browse.Enabled = !_running && !_busy;
+        _path.Enabled = !_running && !_busy;
+    }
+
+    private void RefreshPreview()
     {
         if (_pump.Error is { } error && !_reportedError)
         {
             _reportedError = true;
-            StopPlayback();
+            _ = StopPlaybackAsync();
             MessageBox.Show(this, error.Message, "MeetCam", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return;
         }
@@ -202,16 +349,20 @@ internal sealed class MainForm : Form
         if (!_running)
             return;
 
-        var loops = _pump.LoopCount;
-        var length = _pump.DurationSeconds > 0 ? $"{_pump.DurationSeconds:0.#}초" : "길이 알 수 없음";
-        _status.Text = loops == 0
-            ? $"송출 중  ·  {length}  ·  {_pump.SourceFps:0.#}fps"
-            : $"반복 재생 중  ·  {loops}회  ·  {length}";
+        if (_pump.FramesPublished > 0)
+        {
+            var loops = _pump.LoopCount;
+            var length = _pump.DurationSeconds > 0 ? $"{_pump.DurationSeconds:0.#}초" : "길이 확인 중";
+            _status.Text = loops == 0
+                ? $"송출 중  ·  {length}  ·  {_pump.SourceFps:0.#}fps"
+                : $"반복 재생 중  ·  {loops}회  ·  {length}";
+        }
 
         if (!_pump.TryCopyPreview(_previewBuffer))
             return;
 
         var pin = GCHandle.Alloc(_previewBuffer, GCHandleType.Pinned);
+        Bitmap? copy = null;
         try
         {
             using var wrapped = new Bitmap(
@@ -220,15 +371,30 @@ internal sealed class MainForm : Form
                 Shared.FrameWidth * 4,
                 PixelFormat.Format32bppArgb,
                 pin.AddrOfPinnedObject());
-            var copy = new Bitmap(wrapped);
-            var previous = _preview.Image;
-            _preview.Image = copy;
-            previous?.Dispose();
+            copy = new Bitmap(wrapped);
         }
         finally
         {
             pin.Free();
         }
+        if (IsDisposed || copy == null)
+        {
+            copy?.Dispose();
+            return;
+        }
+        _preview.ShowFrame(copy);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if ((_running || _busy) && !_closeAfterStop)
+        {
+            e.Cancel = true;
+            _closeAfterStop = true;
+            _ = StopPlaybackAsync();
+            return;
+        }
+        base.OnFormClosing(e);
     }
 
     private static string LoadLastVideo()
@@ -264,7 +430,9 @@ internal sealed class MainForm : Form
     {
         if (disposing)
         {
-            _timer.Dispose();
+            _motion.Dispose();
+            _frames.Dispose();
+            _preview.ClearFrame();
             _pump.Dispose();
             _camera.Dispose();
         }

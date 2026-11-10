@@ -28,25 +28,19 @@ internal sealed class VideoPump : IDisposable
     public void Start(string path)
     {
         Stop();
-        using var probe = new VideoCapture(path);
-        if (!probe.IsOpened())
-            throw new IOException("영상을 열 수 없습니다. mp4, mkv, avi, mov, webm 파일을 확인해 주세요.");
-
-        SourceWidth = probe.FrameWidth;
-        SourceHeight = probe.FrameHeight;
-        SourceFps = SanitizeFps(probe.Fps);
-        var frameCount = probe.FrameCount;
-        DurationSeconds = frameCount > 0 && SourceFps > 0 ? frameCount / SourceFps : 0;
-        var orientation = (int)probe.Get((VideoCaptureProperties)48);
-
         Interlocked.Exchange(ref _loopCount, 0);
         Interlocked.Exchange(ref _framesPublished, 0);
         Volatile.Write(ref _error, null);
+        SourceWidth = 0;
+        SourceHeight = 0;
+        SourceFps = 0;
+        DurationSeconds = 0;
 
-        _writer = new FramePipe.Writer();
+        var writer = new FramePipe.Writer();
+        _writer = writer;
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
-        _thread = new Thread(() => Run(path, orientation, token))
+        _thread = new Thread(() => Run(path, writer, token))
         {
             IsBackground = true,
             Name = "MeetCam.Video",
@@ -58,13 +52,31 @@ internal sealed class VideoPump : IDisposable
     {
         var cancel = _cancel;
         var thread = _thread;
+        var writer = _writer;
         _cancel = null;
         _thread = null;
-        cancel?.Cancel();
-        thread?.Join(TimeSpan.FromSeconds(3));
-        cancel?.Dispose();
-        _writer?.Dispose();
         _writer = null;
+        cancel?.Cancel();
+        if (thread != null && !thread.Join(TimeSpan.FromSeconds(3)))
+        {
+            writer?.Dispose();
+            var pending = thread;
+            Task.Run(() =>
+            {
+                try
+                {
+                    pending.Join();
+                }
+                finally
+                {
+                    cancel?.Dispose();
+                }
+            });
+            return;
+        }
+
+        writer?.Dispose();
+        cancel?.Dispose();
     }
 
     public bool TryCopyPreview(byte[] destination)
@@ -79,7 +91,7 @@ internal sealed class VideoPump : IDisposable
         }
     }
 
-    private void Run(string path, int orientation, CancellationToken token)
+    private void Run(string path, FramePipe.Writer writer, CancellationToken token)
     {
         var buffer = new byte[FramePipe.PixelBytes];
         var pin = GCHandle.Alloc(buffer, GCHandleType.Pinned);
@@ -96,9 +108,15 @@ internal sealed class VideoPump : IDisposable
                 Shared.FrameWidth * 4);
 
             if (!capture.IsOpened())
-                throw new IOException("영상을 열 수 없습니다.");
+                throw new IOException("영상을 열 수 없습니다. mp4, mkv, avi, mov, webm 파일을 확인해 주세요.");
 
             var fps = SanitizeFps(capture.Fps);
+            SourceWidth = capture.FrameWidth;
+            SourceHeight = capture.FrameHeight;
+            SourceFps = fps;
+            var frameCount = capture.FrameCount;
+            DurationSeconds = frameCount > 0 && fps > 0 ? frameCount / fps : 0;
+            var orientation = (int)capture.Get((VideoCaptureProperties)48);
             var interval = TimeSpan.FromSeconds(1.0 / fps);
             var clock = Stopwatch.StartNew();
             var index = 0L;
@@ -110,7 +128,7 @@ internal sealed class VideoPump : IDisposable
 
                 var source = ApplyOrientation(raw, oriented, orientation);
                 Compose(source, canvas);
-                _writer?.Publish(buffer);
+                writer.Publish(buffer);
                 Interlocked.Increment(ref _framesPublished);
                 StorePreview(buffer);
 
@@ -130,7 +148,8 @@ internal sealed class VideoPump : IDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Volatile.Write(ref _error, ex);
+            if (!token.IsCancellationRequested)
+                Volatile.Write(ref _error, ex);
         }
         finally
         {
