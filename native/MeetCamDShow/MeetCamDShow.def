@@ -1,0 +1,6 @@
+LIBRARY MeetCamDShow
+EXPORTS
+    DllGetClassObject
+    DllCanUnloadNow
+    DllRegisterServer
+    DllUnregisterServer
