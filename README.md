@@ -1,6 +1,7 @@
 # MeetCam
 
-녹화해 둔 영상을 Google Meet 카메라로 보냅니다. 영상이 끝나면 처음부터 다시 재생합니다. 마이크는 바꾸지 않습니다.
+Google Meet용 가상 카메라입니다.
+자신이 보여주고 싶은 동영상을 송출하세요.
 
 송출 크기는 1280x720, 30fps입니다. 원본 비율은 유지하고 빈 곳은 검은 여백으로 채웁니다.
 
@@ -12,11 +13,13 @@
 | 브라우저 | Google Chrome, Microsoft Edge, Firefox |
 | 런타임 | .NET 9 |
 
-Windows 10, macOS, Linux에서는 동작하지 않습니다. 가상 카메라 API가 Windows 11에만 있습니다.
+Windows 10, macOS, Linux에서는 동작하지 않습니다. 
+(가상 카메라 API가 Windows 11에만 있습니다)
 
-Chrome과 Edge는 Windows 가상 카메라로 MeetCam을 봅니다. 목록 이름은 `MeetCam (Windows 가상 카메라)`입니다. Firefox는 DirectShow 카메라만 사용하며, 목록 이름은 `MeetCam`입니다. 두 이름 모두 이 프로그램이 만든 카메라입니다. `HD Camera`처럼 실제 카메라는 고르지 않습니다.
+Chrome과 Edge에서의 목록 이름은 `MeetCam (Windows 가상 카메라)`입니다. 
+Firefox는 내부적으로 DirectShow 카메라만 사용하여 따로 개발했고, 때문에 목록 이름은 `MeetCam`입니다.
 
-## 준비
+## 빌드 방법
 
 1. [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)를 설치합니다.
 2. Firefox에서도 쓰려면 DirectShow DLL을 먼저 만듭니다. Windows에 MinGW-w64(`x86_64-w64-mingw32-g++`)가 있어야 합니다.
