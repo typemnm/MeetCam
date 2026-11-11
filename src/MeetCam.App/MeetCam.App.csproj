@@ -11,7 +11,12 @@
     <RootNamespace>MeetCam</RootNamespace>
     <AssemblyName>MeetCam</AssemblyName>
     <Version>1.0.1</Version>
+    <ApplicationIcon>MeetCam.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <None Remove="MeetCam.ico" />
+    <EmbeddedResource Include="MeetCam.ico" LogicalName="MeetCam.AppIcon.ico" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MeetCam.Source\MeetCam.Source.csproj" />
     <PackageReference Include="DirectNCore" Version="1.17.3" />

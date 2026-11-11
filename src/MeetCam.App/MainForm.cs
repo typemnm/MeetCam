@@ -40,6 +40,7 @@ internal sealed class MainForm : Form
     public MainForm(string? initialVideo)
     {
         Text = "MeetCam";
+        Icon = AppIcon;
         Font = new Font("Segoe UI", 10f);
         BackColor = Paper;
         ForeColor = Color.FromArgb(42, 33, 28);
@@ -495,6 +496,14 @@ internal sealed class MainForm : Form
 
     private static string SettingsFile()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MeetCam", "last-video.txt");
+
+    private static readonly Icon AppIcon = LoadAppIcon();
+
+    private static Icon LoadAppIcon()
+    {
+        using var stream = typeof(MainForm).Assembly.GetManifestResourceStream("MeetCam.AppIcon.ico");
+        return stream == null ? SystemIcons.Application : new Icon(stream);
+    }
 
     private const int EM_SETSEL = 0x00B1;
     private const int EM_SCROLLCARET = 0x00B7;
