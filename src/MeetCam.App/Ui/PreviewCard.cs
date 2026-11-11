@@ -31,15 +31,12 @@ internal sealed class PreviewCard : Control
 
     public void ShowFrame(Bitmap frame)
     {
-        var previous = _frame;
         _frame = frame;
-        previous?.Dispose();
         Invalidate();
     }
 
     public void ClearFrame()
     {
-        _frame?.Dispose();
         _frame = null;
         Invalidate();
     }
@@ -152,7 +149,7 @@ internal sealed class PreviewCard : Control
     protected override void Dispose(bool disposing)
     {
         if (disposing)
-            _frame?.Dispose();
+            _frame = null;
         base.Dispose(disposing);
     }
 

@@ -23,11 +23,13 @@ internal sealed class MainForm : Form
     private readonly BounceButton _start = new() { Text = "송출 시작" };
     private readonly BounceButton _stop = new() { Text = "중지", Fill = Color.FromArgb(255, 244, 238), Fore = Color.FromArgb(92, 42, 28), Enabled = false };
     private readonly Label _status = new() { AutoSize = true, ForeColor = Color.FromArgb(92, 64, 56), Text = "대기 중" };
+    private readonly ToolTip _pathTip = new();
     private readonly VideoPump _pump = new();
     private readonly CameraHost _camera = new();
     private readonly System.Windows.Forms.Timer _motion = new() { Interval = 16 };
     private readonly System.Windows.Forms.Timer _frames = new() { Interval = 80 };
     private readonly byte[] _previewBuffer = new byte[FramePipe.PixelBytes];
+    private Bitmap? _previewBitmap;
     private bool _running;
     private bool _busy;
     private bool _reportedError;
@@ -52,9 +54,11 @@ internal sealed class MainForm : Form
         _title.Font = new Font("Segoe UI", 22f, FontStyle.Bold);
         _subtitle.Font = new Font("Segoe UI", 10f);
         _path.Font = new Font("Segoe UI", 11f);
+        _path.AutoSize = false;
         _path.PlaceholderText = "mp4, mkv, avi, mov, webm";
         _status.Font = new Font("Segoe UI", 10f);
         _status.AutoSize = false;
+        _status.AutoEllipsis = true;
 
         _field.Controls.Add(_path);
         Controls.AddRange([_preview, _mark, _title, _subtitle, _field, _browse, _start, _stop, _status]);
@@ -62,7 +66,7 @@ internal sealed class MainForm : Form
         _browse.Click += (_, _) => Browse();
         _start.Click += (_, _) => StartPlayback();
         _stop.Click += (_, _) => _ = StopPlaybackAsync();
-        _path.Text = initialVideo ?? LoadLastVideo();
+        SetVideoPath(initialVideo ?? LoadLastVideo());
         if (_path.Text.Length > 0 && !File.Exists(_path.Text))
             _status.Text = "이전에 골랐던 영상을 찾지 못했습니다.";
 
@@ -93,6 +97,8 @@ internal sealed class MainForm : Form
             width,
             height);
         LayoutContent();
+        RevealPathEnd();
+        BeginInvoke(RevealPathEnd);
         _motionClock = 0;
         _browse.PopIn();
         _start.PopIn();
@@ -119,24 +125,38 @@ internal sealed class MainForm : Form
         {
             var width = ClientSize.Width;
             var height = ClientSize.Height;
+            var textLeft = 104;
+            var textWidth = Math.Max(80, width - textLeft - 24);
             _mark.SetBounds(20, 8, 76, 84);
-            _title.Location = new Point(104, 16);
-            _subtitle.SetBounds(106, 56, Math.Max(80, width - 130), 36);
-            var fieldWidth = Math.Max(120, width - 156);
-            _field.SetBounds(20, 100, fieldWidth, 52);
-            _browse.SetBounds(_field.Right + 12, 98, 104, 56);
-            _path.SetBounds(16, 14, Math.Max(40, _field.Width - 32), 24);
+            _title.Location = new Point(textLeft, 12);
+            var titleHeight = Math.Max(_title.Height, TextRenderer.MeasureText(_title.Text, _title.Font).Height);
+            var subtitleHeight = WrappedTextHeight(_subtitle.Text, _subtitle.Font, textWidth);
+            _subtitle.SetBounds(textLeft, 12 + titleHeight + 8, textWidth, subtitleHeight);
 
+            var fieldTop = Math.Max(_mark.Bottom, _subtitle.Bottom) + 14;
+            var pathHeight = PathBoxHeight();
+            var fieldHeight = pathHeight + 20;
+            var fieldWidth = Math.Max(120, width - 156);
+            _field.SetBounds(20, fieldTop, fieldWidth, fieldHeight);
+            _browse.SetBounds(_field.Right + 12, fieldTop - 2, 104, fieldHeight + 4);
+            var pathTop = Math.Max(2, (fieldHeight - pathHeight) / 2);
+            _path.SetBounds(16, pathTop, Math.Max(40, _field.Width - 32), pathHeight);
+
+            const int buttonHeight = 58;
             var buttonsTop = height - 72;
-            var previewTop = 164;
+            var previewTop = _field.Bottom + 12;
             var previewHeight = Math.Max(80, buttonsTop - previewTop - 8);
             _preview.SetBounds(12, previewTop, Math.Max(80, width - 24), previewHeight);
-            _start.SetBounds(20, buttonsTop, 168, 58);
-            _stop.SetBounds(200, buttonsTop, 116, 58);
-            _status.SetBounds(332, buttonsTop + 16, Math.Max(40, width - 352), 28);
+            _start.SetBounds(20, buttonsTop, 168, buttonHeight);
+            _stop.SetBounds(200, buttonsTop, 116, buttonHeight);
+            var statusHeight = _status.Font.Height + 8;
+            var statusTop = buttonsTop + Math.Max(0, (buttonHeight - statusHeight) / 2);
+            _status.SetBounds(332, statusTop, Math.Max(40, width - 352), statusHeight);
             _start.BringToFront();
             _stop.BringToFront();
             _browse.BringToFront();
+            if (!_path.Focused)
+                RevealPathEnd();
         }
         finally
         {
@@ -224,9 +244,46 @@ internal sealed class MainForm : Form
             _status.Text = "영상 파일이 아닙니다.";
             return;
         }
-        _path.Text = path;
+        SetVideoPath(path);
         _preview.Pop();
         _status.Text = "준비됨  ·  Enter 또는 송출 시작";
+    }
+
+    private void SetVideoPath(string path)
+    {
+        _path.Text = path;
+        var tip = path.Length == 0 ? null : path;
+        _pathTip.SetToolTip(_path, tip);
+        _pathTip.SetToolTip(_field, tip);
+        RevealPathEnd();
+    }
+
+    // The saved path is wider than the field. Keep the file name in view.
+    private void RevealPathEnd()
+    {
+        if (!_path.IsHandleCreated || _path.TextLength == 0)
+            return;
+        var end = (IntPtr)_path.TextLength;
+        SendMessage(_path.Handle, EM_SETSEL, end, end);
+        SendMessage(_path.Handle, EM_SCROLLCARET, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    private int PathBoxHeight()
+    {
+        var fromFont = _path.Font.Height + 6;
+        if (!_path.IsHandleCreated)
+            return fromFont;
+        return Math.Max(_path.PreferredHeight + 2, fromFont);
+    }
+
+    private static int WrappedTextHeight(string text, Font font, int width)
+    {
+        var measured = TextRenderer.MeasureText(
+            text,
+            font,
+            new Size(Math.Max(1, width), int.MaxValue),
+            TextFormatFlags.WordBreak | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
+        return Math.Max(font.Height + 6, measured.Height + 6);
     }
 
     private void StartPlayback()
@@ -311,7 +368,7 @@ internal sealed class MainForm : Form
         {
             await Task.Run(_pump.Stop);
             _camera.Stop();
-            _preview.ClearFrame();
+            ReleasePreviewBitmap();
             _status.Text = "중지됨";
         }
         catch (Exception ex)
@@ -360,29 +417,42 @@ internal sealed class MainForm : Form
 
         if (!_pump.TryCopyPreview(_previewBuffer))
             return;
+        if (IsDisposed)
+            return;
 
-        var pin = GCHandle.Alloc(_previewBuffer, GCHandleType.Pinned);
-        Bitmap? copy = null;
+        CopyPreviewBitmap();
+        _preview.ShowFrame(_previewBitmap!);
+    }
+
+    private void CopyPreviewBitmap()
+    {
+        _previewBitmap ??= new Bitmap(Shared.FrameWidth, Shared.FrameHeight, PixelFormat.Format32bppArgb);
+        var rect = new Rectangle(0, 0, Shared.FrameWidth, Shared.FrameHeight);
+        var data = _previewBitmap.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
         try
         {
-            using var wrapped = new Bitmap(
-                Shared.FrameWidth,
-                Shared.FrameHeight,
-                Shared.FrameWidth * 4,
-                PixelFormat.Format32bppArgb,
-                pin.AddrOfPinnedObject());
-            copy = new Bitmap(wrapped);
+            var srcStride = Shared.FrameWidth * 4;
+            if (data.Stride == srcStride)
+            {
+                Marshal.Copy(_previewBuffer, 0, data.Scan0, srcStride * Shared.FrameHeight);
+            }
+            else
+            {
+                for (var y = 0; y < Shared.FrameHeight; y++)
+                    Marshal.Copy(_previewBuffer, y * srcStride, data.Scan0 + (y * data.Stride), srcStride);
+            }
         }
         finally
         {
-            pin.Free();
+            _previewBitmap.UnlockBits(data);
         }
-        if (IsDisposed || copy == null)
-        {
-            copy?.Dispose();
-            return;
-        }
-        _preview.ShowFrame(copy);
+    }
+
+    private void ReleasePreviewBitmap()
+    {
+        _preview.ClearFrame();
+        _previewBitmap?.Dispose();
+        _previewBitmap = null;
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -426,13 +496,20 @@ internal sealed class MainForm : Form
     private static string SettingsFile()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MeetCam", "last-video.txt");
 
+    private const int EM_SETSEL = 0x00B1;
+    private const int EM_SCROLLCARET = 0x00B7;
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             _motion.Dispose();
             _frames.Dispose();
-            _preview.ClearFrame();
+            _pathTip.Dispose();
+            ReleasePreviewBitmap();
             _pump.Dispose();
             _camera.Dispose();
         }

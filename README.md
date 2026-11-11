@@ -51,4 +51,4 @@ Meet에 영상을 보이게 하려면 앱이 송출 중이어야 합니다. 앱�
 
 ## 버전
 
-현재 릴리즈는 1.0.0입니다. 개발 과정과 이전 버전은 [CHANGELOG.md](CHANGELOG.md)와 GitHub 릴리즈에 있습니다.
+현재 릴리즈는 1.0.1입니다. 개발 과정과 이전 버전은 [CHANGELOG.md](CHANGELOG.md)와 GitHub 릴리즈에 있습니다.

@@ -33,6 +33,7 @@ namespace MeetCam.Source
             if (_renderTarget == null)
                 return HRESULTS.E_FAIL;
 
+            ReleaseDrawingObjects();
             _whiteBrush = _renderTarget.CreateSolidColorBrush(new _D3DCOLORVALUE(1, 1, 1, 1));
             _dwrite = DWriteFunctions.DWriteCreateFactory(DWRITE_FACTORY_TYPE.DWRITE_FACTORY_TYPE_SHARED);
             _textFormat = _dwrite.CreateTextFormat("Segoe UI", 40);
@@ -46,16 +47,30 @@ namespace MeetCam.Source
         private void SetConverterTypes(uint width, uint height)
         {
             Functions.MFCreateMediaType(out var inputType).ThrowOnError();
-            inputType.SetGUID(MFConstants.MF_MT_MAJOR_TYPE, MFConstants.MFMediaType_Video).ThrowOnError();
-            inputType.SetGUID(MFConstants.MF_MT_SUBTYPE, MFConstants.MFVideoFormat_RGB32).ThrowOnError();
-            inputType.SetSize(MFConstants.MF_MT_FRAME_SIZE, width, height);
-            _converter!.Object.SetInputType(0, inputType, 0).ThrowOnError();
+            try
+            {
+                inputType.SetGUID(MFConstants.MF_MT_MAJOR_TYPE, MFConstants.MFMediaType_Video).ThrowOnError();
+                inputType.SetGUID(MFConstants.MF_MT_SUBTYPE, MFConstants.MFVideoFormat_RGB32).ThrowOnError();
+                inputType.SetSize(MFConstants.MF_MT_FRAME_SIZE, width, height);
+                _converter!.Object.SetInputType(0, inputType, 0).ThrowOnError();
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(inputType);
+            }
 
             Functions.MFCreateMediaType(out var outputType).ThrowOnError();
-            outputType.SetGUID(MFConstants.MF_MT_MAJOR_TYPE, MFConstants.MFMediaType_Video).ThrowOnError();
-            outputType.SetGUID(MFConstants.MF_MT_SUBTYPE, MFConstants.MFVideoFormat_NV12).ThrowOnError();
-            outputType.SetSize(MFConstants.MF_MT_FRAME_SIZE, width, height);
-            _converter!.Object.SetOutputType(0, outputType, 0).ThrowOnError();
+            try
+            {
+                outputType.SetGUID(MFConstants.MF_MT_MAJOR_TYPE, MFConstants.MFMediaType_Video).ThrowOnError();
+                outputType.SetGUID(MFConstants.MF_MT_SUBTYPE, MFConstants.MFVideoFormat_NV12).ThrowOnError();
+                outputType.SetSize(MFConstants.MF_MT_FRAME_SIZE, width, height);
+                _converter!.Object.SetOutputType(0, outputType, 0).ThrowOnError();
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(outputType);
+            }
         }
 
         public HRESULT SetD3DManager(object manager, uint width, uint height)
@@ -109,7 +124,9 @@ namespace MeetCam.Source
             {
                 if (!HasD3DManager)
                 {
-                    // create a D2D1 render target from WIC bitmap
+                    // Meet starts the stream again when the camera is toggled.
+                    // Drop the previous WIC target before building another one.
+                    ReleaseCpuTarget();
                     using var factory = D2D1Functions.D2D1CreateFactory(D2D1_FACTORY_TYPE.D2D1_FACTORY_TYPE_MULTI_THREADED);
                     _bitmap = WICImagingFactory.CreateBitmap((int)width, (int)height, WICConstants.GUID_WICPixelFormat32bppPBGRA, WICBitmapCreateCacheOption.WICBitmapCacheOnDemand);
                     _renderTarget = factory.CreateWicBitmapRenderTarget(_bitmap, new D2D1_RENDER_TARGET_PROPERTIES
@@ -256,6 +273,27 @@ namespace MeetCam.Source
             using var layout = _dwrite.CreateTextLayout(_textFormat, text, text.Length, _width, _height);
             _renderTarget.DrawTextLayout(new D2D_POINT_2F(0, 0), layout, _whiteBrush);
             _renderTarget.EndDraw();
+        }
+
+        private void ReleaseDrawingObjects()
+        {
+            _whiteBrush.SafeDispose();
+            _whiteBrush = null;
+            _textFormat.SafeDispose();
+            _textFormat = null;
+            _dwrite.SafeDispose();
+            _dwrite = null;
+        }
+
+        private void ReleaseCpuTarget()
+        {
+            ReleaseDrawingObjects();
+            _renderTarget.SafeDispose();
+            _renderTarget = null;
+            _bitmap.SafeDispose();
+            _bitmap = null;
+            _converter.SafeDispose();
+            _converter = null;
         }
 
         protected virtual void Dispose(bool disposing)
