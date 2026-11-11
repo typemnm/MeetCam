@@ -23,6 +23,15 @@ internal sealed class MainForm : Form
     private readonly BounceButton _start = new() { Text = "송출 시작" };
     private readonly BounceButton _stop = new() { Text = "중지", Fill = Color.FromArgb(255, 244, 238), Fore = Color.FromArgb(92, 42, 28), Enabled = false };
     private readonly Label _status = new() { AutoSize = true, ForeColor = Color.FromArgb(92, 64, 56), Text = "대기 중" };
+    private readonly FieldShell _planField = new();
+    private readonly TextBox _planLink = new() { BorderStyle = BorderStyle.None, BackColor = Color.White };
+    private readonly DateTimePicker _planWhen = new() { Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy-MM-dd HH:mm" };
+    private readonly BounceButton _planButton = new() { Text = "예약", Fill = Color.FromArgb(255, 214, 196), Fore = Color.FromArgb(92, 42, 28) };
+    private readonly FieldShell _accountField = new();
+    private readonly TextBox _account = new() { BorderStyle = BorderStyle.None, BackColor = Color.White };
+    private readonly FieldShell _secretField = new();
+    private readonly TextBox _secret = new() { BorderStyle = BorderStyle.None, BackColor = Color.White, UseSystemPasswordChar = true };
+    private readonly System.Windows.Forms.Timer _planTimer = new() { Interval = 1000 };
     private readonly ToolTip _pathTip = new();
     private readonly VideoPump _pump = new();
     private readonly CameraHost _camera = new();
@@ -36,6 +45,10 @@ internal sealed class MainForm : Form
     private bool _closeAfterStop;
     private bool _layingOut;
     private int _motionClock;
+    private MeetingPlan? _plan;
+    private CancellationTokenSource? _joinCancel;
+    private bool _joinRunning;
+    private bool _loginLoaded;
 
     public MainForm(string? initialVideo)
     {
@@ -44,8 +57,8 @@ internal sealed class MainForm : Form
         Font = new Font("Segoe UI", 10f);
         BackColor = Paper;
         ForeColor = Color.FromArgb(42, 33, 28);
-        MinimumSize = new Size(680, 460);
-        ClientSize = new Size(760, 520);
+        MinimumSize = new Size(680, 612);
+        ClientSize = new Size(760, 652);
         StartPosition = FormStartPosition.Manual;
 
         AllowDrop = true;
@@ -60,9 +73,23 @@ internal sealed class MainForm : Form
         _status.Font = new Font("Segoe UI", 10f);
         _status.AutoSize = false;
         _status.AutoEllipsis = true;
+        _planLink.Font = new Font("Segoe UI", 11f);
+        _planLink.AutoSize = false;
+        _planLink.PlaceholderText = "meet.google.com/abc-defg-hij";
+        _account.Font = new Font("Segoe UI", 11f);
+        _account.AutoSize = false;
+        _account.PlaceholderText = "다른 Google 계정";
+        _secret.Font = new Font("Segoe UI", 11f);
+        _secret.AutoSize = false;
+        _secret.PlaceholderText = "비밀번호";
+        _planWhen.Font = new Font("Segoe UI", 10f);
+        _planWhen.Value = DateTime.Now.AddHours(1);
 
         _field.Controls.Add(_path);
-        Controls.AddRange([_preview, _mark, _title, _subtitle, _field, _browse, _start, _stop, _status]);
+        _planField.Controls.Add(_planLink);
+        _accountField.Controls.Add(_account);
+        _secretField.Controls.Add(_secret);
+        Controls.AddRange([_preview, _mark, _title, _subtitle, _field, _browse, _planField, _planWhen, _planButton, _accountField, _secretField, _start, _stop, _status]);
 
         _browse.Click += (_, _) => Browse();
         _start.Click += (_, _) => StartPlayback();
@@ -70,6 +97,15 @@ internal sealed class MainForm : Form
         SetVideoPath(initialVideo ?? LoadLastVideo());
         if (_path.Text.Length > 0 && !File.Exists(_path.Text))
             _status.Text = "이전에 골랐던 영상을 찾지 못했습니다.";
+        LoadPlan();
+        LoadLogin();
+        _account.Leave += (_, _) => PersistLogin();
+        _secret.Leave += (_, _) => PersistLogin();
+        _pathTip.SetToolTip(_account, "회의에 들어갈 계정입니다. 회의를 만든 계정은 피하세요.");
+        _pathTip.SetToolTip(_secret, "이 Windows 사용자 자격 증명에 저장됩니다.");
+        _planButton.Click += (_, _) => OnPlanButton();
+        _planTimer.Tick += (_, _) => OnPlanTick();
+        _planTimer.Start();
 
         DragEnter += (_, e) => OnDragEntered(e);
         DragDrop += (_, e) => AcceptDrop(e);
@@ -143,9 +179,26 @@ internal sealed class MainForm : Form
             var pathTop = Math.Max(2, (fieldHeight - pathHeight) / 2);
             _path.SetBounds(16, pathTop, Math.Max(40, _field.Width - 32), pathHeight);
 
+            var planTop = _field.Bottom + 10;
+            const int whenWidth = 196;
+            const int planButtonWidth = 96;
+            var planFieldWidth = Math.Max(120, width - 40 - whenWidth - planButtonWidth - 16);
+            _planField.SetBounds(20, planTop, planFieldWidth, fieldHeight);
+            _planLink.SetBounds(16, pathTop, Math.Max(40, _planField.Width - 32), pathHeight);
+            _planWhen.SetBounds(_planField.Right + 8, planTop + Math.Max(0, (fieldHeight - 28) / 2), whenWidth, Math.Max(28, fieldHeight - 8));
+            _planButton.SetBounds(_planWhen.Right + 8, planTop - 2, planButtonWidth, fieldHeight + 4);
+
+            var accountTop = _planField.Bottom + 10;
+            const int secretWidth = 220;
+            var accountWidth = Math.Max(160, width - 40 - secretWidth - 8);
+            _accountField.SetBounds(20, accountTop, accountWidth, fieldHeight);
+            _account.SetBounds(16, pathTop, Math.Max(40, _accountField.Width - 32), pathHeight);
+            _secretField.SetBounds(_accountField.Right + 8, accountTop, secretWidth, fieldHeight);
+            _secret.SetBounds(16, pathTop, Math.Max(40, _secretField.Width - 32), pathHeight);
+
             const int buttonHeight = 58;
             var buttonsTop = height - 72;
-            var previewTop = _field.Bottom + 12;
+            var previewTop = _secretField.Bottom + 12;
             var previewHeight = Math.Max(80, buttonsTop - previewTop - 8);
             _preview.SetBounds(12, previewTop, Math.Max(80, width - 24), previewHeight);
             _start.SetBounds(20, buttonsTop, 168, buttonHeight);
@@ -156,6 +209,7 @@ internal sealed class MainForm : Form
             _start.BringToFront();
             _stop.BringToFront();
             _browse.BringToFront();
+            _planButton.BringToFront();
             if (!_path.Focused)
                 RevealPathEnd();
         }
@@ -181,22 +235,25 @@ internal sealed class MainForm : Form
 
     private void OnFormKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.KeyCode == Keys.Enter && !_path.Focused)
-        {
-            StartPlayback();
-            e.Handled = true;
-        }
-        else if (e.KeyCode == Keys.Enter && _path.Focused)
-        {
-            StartPlayback();
-            e.SuppressKeyPress = true;
-            e.Handled = true;
-        }
-        else if (e.KeyCode == Keys.Escape && (_running || _busy))
+        if (e.KeyCode == Keys.Escape && (_running || _busy))
         {
             _ = StopPlaybackAsync();
             e.Handled = true;
+            return;
         }
+
+        if (e.KeyCode != Keys.Enter)
+            return;
+        if (_account.Focused || _secret.Focused || _planLink.Focused || _planWhen.Focused)
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            return;
+        }
+
+        StartPlayback();
+        e.Handled = true;
+        e.SuppressKeyPress = true;
     }
 
     private void Browse()
@@ -285,6 +342,245 @@ internal sealed class MainForm : Form
             new Size(Math.Max(1, width), int.MaxValue),
             TextFormatFlags.WordBreak | TextFormatFlags.Left | TextFormatFlags.NoPrefix);
         return Math.Max(font.Height + 6, measured.Height + 6);
+    }
+
+    private void LoadPlan()
+    {
+        _plan = MeetingPlan.TryLoad();
+        if (_plan == null)
+            return;
+        if (!string.IsNullOrWhiteSpace(_plan.Link))
+            _planLink.Text = _plan.Link;
+        if (_plan.LocalStart.Year >= 2000)
+            _planWhen.Value = _plan.LocalStart;
+        if (!_plan.Armed)
+            return;
+        _planButton.Text = "취소";
+        ShowArmedStatus();
+    }
+
+    private void OnPlanButton()
+    {
+        if (_plan?.Armed == true || _joinRunning)
+        {
+            CancelPlan();
+            return;
+        }
+        ArmPlan();
+    }
+
+    private void ArmPlan()
+    {
+        if (!MeetingPlan.TryNormalize(_planLink.Text, out var link))
+        {
+            _status.Text = "Meet 링크를 입력해 주세요.";
+            return;
+        }
+
+        var when = _planWhen.Value;
+        if (when < DateTime.Now.AddMinutes(-1))
+        {
+            _status.Text = "지난 시간은 예약할 수 없습니다.";
+            return;
+        }
+
+        _plan = new MeetingPlan { Link = link, LocalStart = when, Armed = true };
+        _plan.Save();
+        _planLink.Text = link;
+        _planButton.Text = "취소";
+        if (!PersistLogin())
+            _status.Text = "예약했습니다. 계정 정보는 저장하지 못했습니다.";
+        else
+            ShowArmedStatus();
+    }
+
+    private void CancelPlan()
+    {
+        _joinCancel?.Cancel();
+        if (_plan != null)
+        {
+            _plan.Armed = false;
+            _plan.Save();
+        }
+        _planButton.Text = "예약";
+        if (!_running)
+            _status.Text = "예약을 취소했습니다.";
+    }
+
+    private void LoadLogin()
+    {
+        if (GoogleLogin.TryLoad(out var email, out var password))
+        {
+            _account.Text = email;
+            _secret.Text = password;
+        }
+        _loginLoaded = true;
+    }
+
+    private bool PersistLogin()
+    {
+        if (!_loginLoaded)
+            return true;
+        return GoogleLogin.Save(_account.Text.Trim(), _secret.Text);
+    }
+
+    private void ShowArmedStatus()
+    {
+        if (_plan == null || !_plan.Armed || _running || _joinRunning)
+            return;
+        var path = _path.Text.Trim().Trim('"');
+        _status.Text = File.Exists(path)
+            ? $"{_plan.LocalStart:M월 d일 H:mm}에 회의에 들어갑니다"
+            : "예약됨. 영상 파일을 찾지 못했습니다.";
+    }
+
+    private async void OnPlanTick()
+    {
+        try
+        {
+            if (_joinRunning || _plan == null || !_plan.Armed || IsDisposed)
+                return;
+            var now = DateTime.Now;
+            if (now < _plan.LocalStart)
+                return;
+            if (now > _plan.LocalStart.AddMinutes(15))
+            {
+                _plan.Armed = false;
+                _plan.Save();
+                _planButton.Text = "예약";
+                if (!_running)
+                    _status.Text = "예약 시간이 지났습니다.";
+                return;
+            }
+
+            var path = _path.Text.Trim().Trim('"');
+            if (!File.Exists(path) || Directory.Exists(path))
+            {
+                _status.Text = "영상 파일을 찾을 수 없습니다.";
+                return;
+            }
+
+            _joinRunning = true;
+            _joinCancel = new CancellationTokenSource();
+            var token = _joinCancel.Token;
+            var link = _plan.Link;
+            var account = _account.Text.Trim();
+            var password = _secret.Text;
+            PersistLogin();
+            _status.Text = "회의에 들어가는 중";
+            try
+            {
+                var joiner = new MeetJoiner();
+                await joiner.RunAsync(link, account, password, OnMeetSignal, token);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!_running && !IsDisposed)
+                    _status.Text = "예약을 취소했습니다.";
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed)
+                {
+                    _status.Text = "회의에 들어가지 못했습니다.";
+                    MessageBox.Show(this, ex.Message, "MeetCam", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            finally
+            {
+                _joinRunning = false;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException)
+        {
+            _joinRunning = false;
+            if (!IsDisposed)
+                _status.Text = "회의에 들어가지 못했습니다.";
+        }
+    }
+
+    private Task<bool> OnMeetSignal(MeetSignal signal)
+    {
+        if (IsDisposed)
+            return Task.FromResult(false);
+        if (!InvokeRequired)
+            return Task.FromResult(HandleMeetSignal(signal));
+
+        var done = new TaskCompletionSource<bool>();
+        BeginInvoke(() =>
+        {
+            try
+            {
+                done.SetResult(HandleMeetSignal(signal));
+            }
+            catch (Exception ex)
+            {
+                done.SetException(ex);
+            }
+        });
+        return done.Task;
+    }
+
+    private bool HandleMeetSignal(MeetSignal signal)
+    {
+        switch (signal)
+        {
+            case MeetSignal.NeedLogin:
+                _status.Text = "Chrome 창에서 Google 계정으로 로그인해 주세요.";
+                return true;
+            case MeetSignal.SigningIn:
+                _status.Text = "Google 계정으로 로그인하는 중";
+                return true;
+            case MeetSignal.NeedVerification:
+                _status.Text = "휴대폰 인증을 기다리는 중";
+                return true;
+            case MeetSignal.LoginRejected:
+                _status.Text = "비밀번호가 맞지 않습니다.";
+                return true;
+            case MeetSignal.LoginBlocked:
+                _status.Text = "Chrome 창에서 직접 로그인해 주세요.";
+                return true;
+            case MeetSignal.Asked:
+                _status.Text = "참여를 요청했습니다.";
+                return true;
+            case MeetSignal.WaitingApproval:
+                _status.Text = "승인을 기다리는 중";
+                return true;
+            case MeetSignal.Admitted:
+                _status.Text = "승인되었습니다. 카메라를 켭니다";
+                if (!_running)
+                    StartPlayback();
+                return _running;
+            case MeetSignal.CameraOn:
+                _status.Text = "회의 카메라를 켰습니다.";
+                DisarmPlan();
+                return true;
+            case MeetSignal.Denied:
+                _status.Text = "참여가 거부되었습니다.";
+                DisarmPlan();
+                return true;
+            case MeetSignal.Invalid:
+                _status.Text = "Meet 링크를 확인하지 못했습니다.";
+                DisarmPlan();
+                return true;
+            default:
+                if (_running)
+                    _status.Text = "회의에서 카메라 버튼을 찾지 못했습니다.";
+                else
+                    _status.Text = "회의에 들어가지 못했습니다.";
+                DisarmPlan();
+                return false;
+        }
+    }
+
+    private void DisarmPlan()
+    {
+        if (_plan != null)
+        {
+            _plan.Armed = false;
+            _plan.Save();
+        }
+        _planButton.Text = "예약";
     }
 
     private void StartPlayback()
@@ -458,6 +754,7 @@ internal sealed class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        PersistLogin();
         if ((_running || _busy) && !_closeAfterStop)
         {
             e.Cancel = true;
@@ -515,6 +812,9 @@ internal sealed class MainForm : Form
     {
         if (disposing)
         {
+            _planTimer.Dispose();
+            _joinCancel?.Cancel();
+            _joinCancel?.Dispose();
             _motion.Dispose();
             _frames.Dispose();
             _pathTip.Dispose();

@@ -14,6 +14,7 @@ internal static class SelfTest
             Environment.SetEnvironmentVariable(
                 "MEETCAM_FRAME",
                 Path.Combine(Path.GetTempPath(), "meetcam-self-test-frame.bin"));
+            MeetPage.SelfCheck();
             TestFrameRoundtrip();
             TestReaderSurvivesPublishing();
             TestVideoLoops();
