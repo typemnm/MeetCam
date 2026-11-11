@@ -48,3 +48,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\publish.ps1
 6. 멈추려면 `중지`를 누릅니다.
 
 Meet에 영상을 보이게 하려면 앱이 송출 중이어야 합니다. 앱을 닫아도 카메라 이름은 목록에 남을 수 있지만, 그때는 새 영상이 나가지 않습니다.
+
+## 버전
+
+현재 릴리즈는 1.0.0입니다. 개발 과정과 이전 버전은 [CHANGELOG.md](CHANGELOG.md)와 GitHub 릴리즈에 있습니다.
