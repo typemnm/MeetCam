@@ -118,6 +118,7 @@ internal sealed class MeetJoiner
                 {
                     if (!prepared)
                     {
+                        await SetMicrophoneOffAsync(snapshot, cancellationToken).ConfigureAwait(false);
                         await SetCameraAsync(snapshot, wantOff: true, cancellationToken).ConfigureAwait(false);
                         await TrySelectMeetCamAsync(snapshot, cancellationToken).ConfigureAwait(false);
                         prepared = true;
@@ -150,6 +151,7 @@ internal sealed class MeetJoiner
                     }
 
                     await Task.Delay(700, cancellationToken).ConfigureAwait(false);
+                    await SetMicrophoneOffAsync(null, cancellationToken).ConfigureAwait(false);
                     var turnedOn = await SetCameraAsync(null, wantOff: false, cancellationToken).ConfigureAwait(false);
                     await onSignal(turnedOn ? MeetSignal.CameraOn : MeetSignal.Failed).ConfigureAwait(false);
                     return;
@@ -289,6 +291,19 @@ internal sealed class MeetJoiner
             return null;
         var dto = JsonSerializer.Deserialize<Snapshot>(json, JsonOptions);
         return dto;
+    }
+
+    private async Task SetMicrophoneOffAsync(Snapshot? snapshot, CancellationToken cancellationToken)
+    {
+        snapshot ??= await ReadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        if (snapshot == null)
+            return;
+        var index = MeetPage.FindMicrophone(snapshot.Controls);
+        if (index < 0)
+            return;
+        var control = snapshot.Controls.First(item => item.Index == index);
+        if (MeetPage.CameraIsOff(control) == false)
+            await ClickIndexAsync(index, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<bool> SetCameraAsync(Snapshot? snapshot, bool wantOff, CancellationToken cancellationToken)

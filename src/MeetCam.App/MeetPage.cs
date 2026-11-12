@@ -216,6 +216,24 @@ internal static class MeetPage
         return -1;
     }
 
+    public static int FindMicrophone(IReadOnlyList<MeetControl> controls)
+    {
+        var fallback = -1;
+        for (var i = 0; i < controls.Count; i++)
+        {
+            if (!IsMicrophone(controls[i]) || IsCamera(controls[i]))
+                continue;
+            var hay = Haystack(controls[i]);
+            if (hay.Contains("option", StringComparison.Ordinal) || hay.Contains("옵션", StringComparison.Ordinal) || hay.Contains("more", StringComparison.Ordinal))
+                continue;
+            if (controls[i].Muted.Length > 0)
+                return controls[i].Index;
+            if (fallback < 0)
+                fallback = controls[i].Index;
+        }
+        return fallback;
+    }
+
     public static int FindCamera(IReadOnlyList<MeetControl> controls)
     {
         var fallback = -1;
@@ -320,6 +338,14 @@ internal static class MeetPage
         var camera = new MeetControl(2, "", "카메라 켜기", "true");
         if (CameraIsOff(camera) != true)
             throw new InvalidOperationException("muted camera should stay off until approval");
+        var devices = new[]
+        {
+            new MeetControl(6, "", "카메라 끄기", "false"),
+            new MeetControl(5, "", "마이크 끄기", "false"),
+            new MeetControl(7, "", "마이크 옵션", ""),
+        };
+        if (FindMicrophone(devices) != 5 || FindCamera(devices) != 6 || CameraIsOff(devices[1]) != false)
+            throw new InvalidOperationException("hot microphone should be muted on entry");
 
         if (!MeetingPlan.TryNormalize("abc-defg-hij", out var fromCode) || fromCode != "https://meet.google.com/abc-defg-hij")
             throw new InvalidOperationException("meeting code was not accepted");
